@@ -6,7 +6,6 @@ import (
 	"strings"
 )
 
-// SubParser contains a Parser pointer and the public name for the sub command.
 type SubParser struct {
 	Parser *Parser
 	Name   string
@@ -15,15 +14,14 @@ type SubParser struct {
 // Parser contains program-level settings and information, stores options,
 // and values collected upon parsing.
 type Parser struct {
-	AllowAbbrev bool
 	Callback    func(*Parser, *Namespace, []string, error)
-	EpilogText  string
-	Namespace   *Namespace
+	ProgramName string
+	AllowAbbrev bool
 	Options     []*Option
 	Parsers     []SubParser
-	ProgramName string
 	UsageText   string
 	VersionDesc string
+	Namespace   *Namespace
 }
 
 // AddHelp adds a new option to output usage information for the current parser
@@ -51,7 +49,9 @@ func (p *Parser) AddOption(f *Option) *Parser {
 
 // AddOptions appends the provided options to the current parser.
 func (p *Parser) AddOptions(opts ...*Option) *Parser {
-	p.Options = append(p.Options, opts...)
+	for _, opt := range opts {
+		p.Options = append(p.Options, opt)
+	}
 	return p
 }
 
@@ -71,7 +71,7 @@ func (p *Parser) GetOption(name string) (*Option, error) {
 		return nil, InvalidFlagNameErr{name}
 	}
 	for _, option := range p.Options {
-		if option.IsPublicName(name) {
+		if option.IsPublicName(name) == true {
 			return option, nil
 		}
 	}
@@ -96,7 +96,7 @@ func (p Parser) GetParser(name string) (*Parser, error) {
 }
 
 // GetHelp returns a string containing the parser's description text,
-// and the usage information for each option currently incorporated within
+// and the usage information for each option currently incorperated within
 // the parser.
 func (p *Parser) GetHelp() string {
 	// Get screen width to determine max line lengths later.
@@ -117,7 +117,7 @@ func (p *Parser) GetHelp() string {
 	longest := 0
 
 	for _, arg := range p.Options {
-		if !arg.IsPositional {
+		if arg.IsPositional == false {
 			notPositional = append(notPositional, arg)
 		} else {
 			positional = append(positional, arg)
@@ -208,7 +208,7 @@ func (p *Parser) GetHelp() string {
 			helpLines := wordWrap(help[i], screenWidth-longest)
 			lines = append(lines, helpLines[0], "\n")
 			if len(helpLines) > 1 {
-				for _, helpLine := range helpLines[1:] {
+				for _, helpLine := range helpLines[1:len(helpLines)] {
 					lines = append(lines, spacer(longest), helpLine, "\n")
 				}
 			}
@@ -237,16 +237,12 @@ func (p *Parser) GetHelp() string {
 			helpLines := wordWrap(help[i], screenWidth-longest)
 			lines = append(lines, helpLines[0], "\n")
 			if len(helpLines) > 1 {
-				for _, helpLine := range helpLines[1:] {
+				for _, helpLine := range helpLines[1:len(helpLines)] {
 					lines = append(lines, spacer(longest), helpLine, "\n")
 				}
 			}
 		}
 		usage = append(usage, lines...)
-	}
-
-	if len(p.EpilogText) > 0 {
-		usage = append(usage, "\n", p.EpilogText)
 	}
 
 	return join("", usage...)
@@ -257,7 +253,7 @@ func (p *Parser) GetVersion() string {
 	return p.ProgramName + " version " + p.VersionDesc
 }
 
-// Parse accepts a slice of strings as options and arguments to be parsed. The
+// Parser accepts a slice of strings as options and arguments to be parsed. The
 // parser will call each encountered option's action. Unexpected options will
 // cause an error. All errors are returned.
 func (p *Parser) Parse(allArgs ...string) {
@@ -269,6 +265,18 @@ func (p *Parser) Parse(allArgs ...string) {
 	var err error
 
 	var optionListing []*Option
+
+	for _, option := range p.Options {
+		if option.IsRequired == true {
+			requiredOptions[option.DestName] = option
+		}
+		p.Namespace.Set(option.DestName, option.DefaultVal)
+		if strings.ToLower(option.ArgNum) == "r" {
+			remainderOptions[option.DisplayName()] = option
+		} else {
+			optionListing = append(optionListing, option)
+		}
+	}
 
 	if len(p.Parsers) > 0 {
 		var usedParser bool
@@ -282,7 +290,7 @@ func (p *Parser) Parse(allArgs ...string) {
 			}
 			if allArgs[0] == name {
 				if len(allArgs) > 0 {
-					allArgs = allArgs[1:]
+					allArgs = allArgs[1:len(allArgs)]
 				} else {
 					allArgs = []string{}
 				}
@@ -292,31 +300,9 @@ func (p *Parser) Parse(allArgs ...string) {
 			}
 		}
 
-		if !usedParser {
+		if usedParser != true {
 			p.Callback(p, p.Namespace, nil, MissingParserErr{p.Parsers})
 			return
-		}
-	}
-
-	for _, option := range p.Options {
-		if option.IsRequired {
-			requiredOptions[option.DestName] = option
-		}
-
-		if isEnvVarFormat(option.DefaultVal) {
-			defVal, err := getEnvVar(option.DefaultVal)
-			if err != nil {
-				p.Callback(p, p.Namespace, allArgs, err)
-				return
-			}
-			p.Namespace.Set(option.DestName, defVal)
-		} else {
-			p.Namespace.Set(option.DestName, option.DefaultVal)
-		}
-		if strings.ToLower(option.ArgNum) == "r" {
-			remainderOptions[option.DisplayName()] = option
-		} else {
-			optionListing = append(optionListing, option)
 		}
 	}
 
@@ -325,10 +311,10 @@ func (p *Parser) Parse(allArgs ...string) {
 		var option *Option
 
 		for _, f := range p.Options {
-			if f.IsPositional {
+			if f.IsPositional == true {
 				continue
 			}
-			if f.IsPublicName(optionName) {
+			if f.IsPublicName(optionName) == true {
 				if _, ok := requiredOptions[f.DisplayName()]; ok {
 					delete(requiredOptions, f.DisplayName())
 				} else if _, ok := remainderOptions[f.DisplayName()]; ok {
@@ -345,9 +331,9 @@ func (p *Parser) Parse(allArgs ...string) {
 		}
 
 		args, err = option.DesiredAction(p, option, args...)
-		p.Callback(p, p.Namespace, args, err)
-		return
+		//return
 	}
+	p.Callback(p, p.Namespace, args, err)
 
 	if len(args) > 0 {
 		for _, opt := range remainderOptions {
@@ -361,7 +347,7 @@ func (p *Parser) Parse(allArgs ...string) {
 	}
 
 	for _, f := range p.Options {
-		if !f.IsPositional {
+		if f.IsPositional == false {
 			continue
 		}
 		if _, ok := requiredOptions[f.DestName]; ok {
@@ -369,7 +355,7 @@ func (p *Parser) Parse(allArgs ...string) {
 		}
 		args, err = f.DesiredAction(p, f, args...)
 		p.Callback(p, p.Namespace, args, err)
-		return
+		//return
 	}
 
 	if len(requiredOptions) != 0 {
@@ -392,13 +378,6 @@ func (p *Parser) Path(progPath string) *Parser {
 // Prog sets the name of the parser directly.
 func (p *Parser) Prog(name string) *Parser {
 	p.ProgramName = name
-	return p
-}
-
-// Epilog sets the provide string as the epilog text for the parser. This text
-// is displayed during the help text, after all available text is outputted.
-func (p *Parser) Epilog(text string) *Parser {
-	p.EpilogText = text
 	return p
 }
 
